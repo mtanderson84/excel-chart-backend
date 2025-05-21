@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 import xlsxwriter
 import os
 from uuid import uuid4
-from openai 
+from openai import OpenAI
 import os
 import base64
 import json
