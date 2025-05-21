@@ -11,7 +11,6 @@ import json
 app = FastAPI()
 
 # Load OpenAI API key from environment variable (in Railway)
-print("🔑 OPENAI_API_KEY:", os.getenv("OPENAI_API_KEY"))
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.post("/generate-excel/")
