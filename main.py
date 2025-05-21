@@ -89,3 +89,40 @@ Respond only in valid JSON.
 
     return FileResponse(filepath, filename="chart.xlsx")
 
+@app.post("/generate-excel/")
+async def generate_excel(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+        print("✅ Image read successfully")
+
+        base64_image = base64.b64encode(contents).decode('utf-8')
+
+        prompt = """... (same as before) ..."""
+
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]}
+            ],
+            max_tokens=1000
+        )
+        print("✅ GPT-4o responded")
+
+        raw_data = response['choices'][0]['message']['content']
+        print("📦 GPT raw content:", raw_data)
+
+        graph_data = json.loads(raw_data)
+        print("✅ Parsed JSON")
+
+        # ... Excel writing code (same as before) ...
+
+        return FileResponse(filepath, filename="chart.xlsx")
+
+    except Exception as e:
+        print("❌ Error:", str(e))
+        return {"error": str(e)}
+
