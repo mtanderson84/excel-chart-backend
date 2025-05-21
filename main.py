@@ -3,7 +3,8 @@ from fastapi.responses import FileResponse
 import xlsxwriter
 import os
 from uuid import uuid4
-import openai
+from openai import OpenAI
+client = OpenAI()
 import base64
 import json
 
@@ -41,22 +42,27 @@ You are an expert in reading charts. Based on this image of a chart, extract the
 Respond only in valid JSON.
 """
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {
-                    "url": f"data:image/jpeg;base64,{base64_image}"}}
-            ]}
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}"}
+                    }
+                ]
+            }
         ],
         max_tokens=1000
     )
 
     try:
-        chart_data = json.loads(response['choices'][0]['message']['content'])
+        chart_data = json.loads(response.choices[0].message.content)
     except json.JSONDecodeError:
         return {"error": "Could not parse GPT response as JSON."}
+
 
     # Create Excel file
     filename = f"{uuid4().hex}.xlsx"
