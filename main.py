@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 import xlsxwriter
 import os
@@ -9,18 +9,44 @@ import json
 
 app = FastAPI()
 
-# ✅ Load OpenAI API key from Railway
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+# ✅ Check if API key exists and initialize client
+def get_openai_client():
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500, 
+            detail="OPENAI_API_KEY environment variable not set"
+        )
+    return OpenAI(api_key=api_key)
+
+@app.get("/")
+async def root():
+    return {"message": "Chart to Excel API is running"}
+
+@app.get("/health")
+async def health_check():
+    # Check if API key is available
+    api_key = os.environ.get("OPENAI_API_KEY")
+    return {
+        "status": "healthy",
+        "openai_key_configured": bool(api_key)
+    }
 
 @app.post("/generate-excel/")
 async def generate_excel(file: UploadFile = File(...)):
     try:
+        # Initialize OpenAI client with error handling
+        client = get_openai_client()
+
+        # Validate file type
+        if not file.content_type or not file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="File must be an image")
+
         contents = await file.read()
         base64_image = base64.b64encode(contents).decode('utf-8')
 
         prompt = """
 You are an expert in reading charts. Based on this image of a chart, extract the chart data in JSON format using this schema:
-
 {
   "title": "string",
   "xAxis": {
@@ -40,56 +66,95 @@ You are an expert in reading charts. Based on this image of a chart, extract the
 Respond only in valid JSON.
 """
 
-        # ✅ Use modern OpenAI SDK
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"}
-                        }
-                    ]
-                }
-            ],
-            max_tokens=1000
-        )
+        # ✅ Use modern OpenAI SDK with error handling
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"}
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=1000
+            )
+        except Exception as openai_error:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"OpenAI API error: {str(openai_error)}"
+            )
 
-        chart_data = json.loads(response.choices[0].message.content)
+        # Parse JSON response
+        try:
+            chart_data = json.loads(response.choices[0].message.content)
+        except json.JSONDecodeError as json_error:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}"
+            )
+
+        # Validate chart_data structure
+        required_keys = ["title", "xAxis", "yAxis", "series"]
+        if not all(key in chart_data for key in required_keys):
+            raise HTTPException(
+                status_code=500, 
+                detail="Invalid chart data structure from OpenAI"
+            )
 
         # ✅ Create Excel file
         filename = f"{uuid4().hex}.xlsx"
         filepath = f"/tmp/{filename}"
-        workbook = xlsxwriter.Workbook(filepath)
-        worksheet = workbook.add_worksheet("Chart Data")
 
-        worksheet.write('A1', chart_data["xAxis"]["title"])
-        worksheet.write_row('A2', ["Category"] + [s["name"] for s in chart_data["series"]])
+        try:
+            workbook = xlsxwriter.Workbook(filepath)
+            worksheet = workbook.add_worksheet("Chart Data")
 
-        for i, label in enumerate(chart_data["xAxis"]["labels"]):
-            row = [label] + [s["data"][i] for s in chart_data["series"]]
-            worksheet.write_row(f'A{i+3}', row)
+            # Write headers
+            worksheet.write('A1', chart_data["xAxis"]["title"])
+            worksheet.write_row('A2', ["Category"] + [s["name"] for s in chart_data["series"]])
 
-        chart = workbook.add_chart({'type': 'column'})
-        for i, s in enumerate(chart_data["series"]):
-            chart.add_series({
-                'name':       s["name"],
-                'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
-                'values':     f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}"
-            })
+            # Write data
+            for i, label in enumerate(chart_data["xAxis"]["labels"]):
+                row = [label] + [s["data"][i] if i < len(s["data"]) else 0 for s in chart_data["series"]]
+                worksheet.write_row(f'A{i+3}', row)
 
-        chart.set_title({'name': chart_data["title"]})
-        chart.set_x_axis({'name': chart_data["xAxis"]["title"]})
-        chart.set_y_axis({'name': chart_data["yAxis"]["title"]})
+            # Create chart
+            chart = workbook.add_chart({'type': 'column'})
+            for i, s in enumerate(chart_data["series"]):
+                chart.add_series({
+                    'name': s["name"],
+                    'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
+                    'values': f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}"
+                })
 
-        worksheet.insert_chart('E2', chart)
-        workbook.close()
+            chart.set_title({'name': chart_data["title"]})
+            chart.set_x_axis({'name': chart_data["xAxis"]["title"]})
+            chart.set_y_axis({'name': chart_data["yAxis"]["title"]})
 
-        return FileResponse(filepath, filename="chart.xlsx")
+            worksheet.insert_chart('E2', chart)
+            workbook.close()
 
+        except Exception as excel_error:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to create Excel file: {str(excel_error)}"
+            )
+
+        return FileResponse(
+            filepath, 
+            filename="chart.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
-        return {"error": str(e)}
-
+        # Catch all other exceptions
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
