@@ -3,15 +3,15 @@ from fastapi.responses import FileResponse
 import xlsxwriter
 import os
 from uuid import uuid4
-from openai import OpenAI
-client = OpenAI()
+from openai 
+import os
 import base64
 import json
 
 app = FastAPI()
 
 # Load OpenAI API key from environment variable (in Railway)
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.post("/generate-excel/")
 async def generate_excel(file: UploadFile = File(...)):
