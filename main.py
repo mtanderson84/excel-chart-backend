@@ -108,7 +108,7 @@ async def generate_excel(file: UploadFile = File(...)):
         # Parse JSON response
         try:
             raw_response = response.choices[0].message.content
-            print("🧠 Raw GPT response:", raw_response)
+            print("\n\n🔍 RAW GPT RESPONSE START\n", raw_response, "\n🔍 RAW GPT RESPONSE END\n\n")
 
             try:
                 import re
