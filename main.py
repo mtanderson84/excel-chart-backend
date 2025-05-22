@@ -104,7 +104,13 @@ Respond only in valid JSON.
             print("🧠 Raw GPT response:", raw_response)
 
             try:
-                chart_data = json.loads(raw_response)
+                import re
+
+                # Remove ```json and ``` if present
+                cleaned_response = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_response.strip(), flags=re.DOTALL)
+
+                chart_data = json.loads(cleaned_response)
+
             except json.JSONDecodeError as json_error:
                 raise HTTPException(
                     status_code=500, 
