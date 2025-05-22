@@ -91,7 +91,17 @@ Respond only in valid JSON.
 
         # Parse JSON response
         try:
-            chart_data = json.loads(response.choices[0].message.content)
+            raw_response = response.choices[0].message.content
+            print("🧠 Raw GPT response:", raw_response)
+
+            try:
+                chart_data = json.loads(raw_response)
+            except json.JSONDecodeError as json_error:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}. Raw content: {raw_response}"
+                )
+
         except json.JSONDecodeError as json_error:
             raise HTTPException(
                 status_code=500, 
