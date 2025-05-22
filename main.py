@@ -1,3 +1,4 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 import xlsxwriter
@@ -8,6 +9,14 @@ import base64
 import json
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or replace * with your frontend Replit domain for security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ✅ Check if API key exists and initialize client
 def get_openai_client():
@@ -25,6 +34,7 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    # Check if API key is available
     api_key = os.environ.get("OPENAI_API_KEY")
     return {
         "status": "healthy",
@@ -34,8 +44,10 @@ async def health_check():
 @app.post("/generate-excel/")
 async def generate_excel(file: UploadFile = File(...)):
     try:
+        # Initialize OpenAI client with error handling
         client = get_openai_client()
 
+        # Validate file type
         if not file.content_type or not file.content_type.startswith('image/'):
             raise HTTPException(status_code=400, detail="File must be an image")
 
@@ -63,6 +75,7 @@ You are an expert in reading charts. Based on this image of a chart, extract the
 Respond only in valid JSON.
 """
 
+        # ✅ Use modern OpenAI SDK with error handling
         try:
             response = client.chat.completions.create(
                 model="gpt-4o",
@@ -85,23 +98,26 @@ Respond only in valid JSON.
                 detail=f"OpenAI API error: {str(openai_error)}"
             )
 
-        raw_response = response.choices[0].message.content.strip()
-        print("🧠 Raw GPT response:", raw_response)
-
-        # ✅ Remove Markdown wrapping if present
-        if raw_response.startswith("```json"):
-            raw_response = raw_response.removeprefix("```json").removesuffix("```").strip()
-        elif raw_response.startswith("```"):
-            raw_response = raw_response.removeprefix("```").removesuffix("```").strip()
-
+        # Parse JSON response
         try:
-            chart_data = json.loads(raw_response)
+            raw_response = response.choices[0].message.content
+            print("🧠 Raw GPT response:", raw_response)
+
+            try:
+                chart_data = json.loads(raw_response)
+            except json.JSONDecodeError as json_error:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}. Raw content: {raw_response}"
+                )
+
         except json.JSONDecodeError as json_error:
             raise HTTPException(
                 status_code=500, 
-                detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}. Raw content: {raw_response}"
+                detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}"
             )
 
+        # Validate chart_data structure
         required_keys = ["title", "xAxis", "yAxis", "series"]
         if not all(key in chart_data for key in required_keys):
             raise HTTPException(
@@ -109,6 +125,7 @@ Respond only in valid JSON.
                 detail="Invalid chart data structure from OpenAI"
             )
 
+        # ✅ Create Excel file
         filename = f"{uuid4().hex}.xlsx"
         filepath = f"/tmp/{filename}"
 
@@ -116,13 +133,16 @@ Respond only in valid JSON.
             workbook = xlsxwriter.Workbook(filepath)
             worksheet = workbook.add_worksheet("Chart Data")
 
+            # Write headers
             worksheet.write('A1', chart_data["xAxis"]["title"])
             worksheet.write_row('A2', ["Category"] + [s["name"] for s in chart_data["series"]])
 
+            # Write data
             for i, label in enumerate(chart_data["xAxis"]["labels"]):
                 row = [label] + [s["data"][i] if i < len(s["data"]) else 0 for s in chart_data["series"]]
                 worksheet.write_row(f'A{i+3}', row)
 
+            # Create chart
             chart = workbook.add_chart({'type': 'column'})
             for i, s in enumerate(chart_data["series"]):
                 chart.add_series({
@@ -151,8 +171,9 @@ Respond only in valid JSON.
         )
 
     except HTTPException:
+        # Re-raise HTTP exceptions
         raise
     except Exception as e:
+        # Catch all other exceptions
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
 
