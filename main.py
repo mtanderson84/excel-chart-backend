@@ -55,25 +55,32 @@ async def generate_excel(file: UploadFile = File(...)):
         base64_image = base64.b64encode(contents).decode('utf-8')
 
         prompt = """
-You are an expert in reading charts. Based on this image of a chart, extract the chart data in JSON format using this schema:
-{
-  "title": "string",
-  "xAxis": {
-    "title": "string",
-    "labels": ["string", ...]
-  },
-  "yAxis": {
-    "title": "string"
-  },
-  "series": [
-    {
-      "name": "string",
-      "data": [number, number, ...]
-    }
-  ]
-}
-Respond only in valid JSON.
-"""
+        You are an expert in reading charts. Based on this image of a chart, extract the chart data in JSON format using this schema. Additionally, include visual style hints like chart type for each series, color (if distinguishable), y-axis range, and legend position.
+
+        {
+          "title": "string",
+          "xAxis": {
+            "title": "string",
+            "labels": ["string", ...]
+          },
+          "yAxis": {
+            "title": "string",
+            "min": number,       // Optional: Y-axis lower bound
+            "max": number        // Optional: Y-axis upper bound
+          },
+          "legendPosition": "bottom", // top | bottom | right | left
+          "series": [
+            {
+              "name": "string",
+              "data": [number, number, ...],
+              "type": "column" | "line",  // Optional chart type per series
+              "color": "string"           // Optional color name or hex
+            }
+          ]
+        }
+        Respond only in valid JSON.
+        """
+
 
         # ✅ Use modern OpenAI SDK with error handling
         try:
@@ -149,7 +156,44 @@ Respond only in valid JSON.
                 worksheet.write_row(f'A{i+3}', row)
 
             # Create chart
+            # Detect y-axis range
+            y_axis_config = {}
+            if "min" in chart_data["yAxis"]:
+                y_axis_config["min"] = chart_data["yAxis"]["min"]
+            if "max" in chart_data["yAxis"]:
+                y_axis_config["max"] = chart_data["yAxis"]["max"]
+            y_axis_config["name"] = chart_data["yAxis"]["title"]
+
+            # Create base chart
             chart = workbook.add_chart({'type': 'column'})
+
+            # Add series dynamically
+            for i, s in enumerate(chart_data["series"]):
+                chart_type = s.get("type", "column")  # Default to column
+                series_chart = workbook.add_chart({'type': chart_type})
+
+                series_chart.add_series({
+                    'name':       s["name"],
+                    'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
+                    'values':     f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}",
+                })
+
+                if "color" in s:
+                    series_chart.set_series_colors([s["color"]])
+
+                chart.combine(series_chart)
+
+            # Apply chart formatting
+            chart.set_title({'name': chart_data["title"]})
+            chart.set_x_axis({'name': chart_data["xAxis"]["title"]})
+            chart.set_y_axis(y_axis_config)
+
+            # Legend position
+            if "legendPosition" in chart_data:
+                chart.set_legend({'position': chart_data["legendPosition"]})
+
+            worksheet.insert_chart('E2', chart)
+
             for i, s in enumerate(chart_data["series"]):
                 chart.add_series({
                     'name': s["name"],
