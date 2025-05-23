@@ -12,7 +12,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Set your frontend domain here in production
+    allow_origins=["*"],  # Replace with frontend domain in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,8 +39,9 @@ async def generate_excel(file: UploadFile = File(...)):
         contents = await file.read()
         base64_image = base64.b64encode(contents).decode("utf-8")
 
-        prompt = """
-You are an expert in reading charts to generate precise data and also recreating images of graphs into actual graphs in Microsoft Excel which perfectly match the image in all respects (chart type, formatting, legend for each data series). Ensure all visible chart series (including column and line) are represented. For each series, assign the correct type (column or line) based on visual style. Also include hex color codes matching the image. Do not omit any visible data series."
+        prompt = '''
+You are an expert in reading charts. Based on this image of a chart, extract the chart data in JSON format. 
+Ensure ALL visible data series are included (column or line). Identify the correct type for each series (`line` or `column`), include color in hex (e.g. `#FF0000`), and include y-axis min/max if discernible. Match chart titles, labels, fonts, layout, and legend position. Use this schema:
 
 {
   "title": "string",
@@ -63,15 +64,8 @@ You are an expert in reading charts to generate precise data and also recreating
     }
   ]
 }
-
-Additional rules:
-- If a line crosses the chart, include it as a series with "type": "line"
-- If a series appears below zero, include negative values.
-- Include "color" from bar/line color if visible.
-- If the chart appears stacked, assume columns share the same x-axis label.
-
-Respond with JSON only, no markdown or preamble.
-"""
+Respond ONLY with raw JSON (no code blocks, no commentary).
+'''
 
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -88,7 +82,7 @@ Respond with JSON only, no markdown or preamble.
         )
 
         raw_response = response.choices[0].message.content
-        print("🧠 Raw GPT response:", raw_response)
+        print("\U0001F9E0 Raw GPT response:", raw_response)
 
         cleaned = raw_response.strip()
         if cleaned.startswith("```"):
@@ -98,10 +92,6 @@ Respond with JSON only, no markdown or preamble.
             chart_data = json.loads(cleaned)
         except json.JSONDecodeError as json_error:
             raise HTTPException(status_code=500, detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}. Raw content: {raw_response}")
-
-        required_keys = ["title", "xAxis", "yAxis", "series"]
-        if not all(key in chart_data for key in required_keys):
-            raise HTTPException(status_code=500, detail="Invalid chart data structure from OpenAI")
 
         filename = f"{uuid4().hex}.xlsx"
         filepath = f"/tmp/{filename}"
@@ -117,57 +107,36 @@ Respond with JSON only, no markdown or preamble.
             worksheet.write_row(f"A{i+3}", row)
 
         base_chart = None
-
         for i, s in enumerate(chart_data["series"]):
             chart_type = s.get("type", "column")
             chart = workbook.add_chart({'type': chart_type})
-
-            series_opts = {
+            chart.add_series({
                 'name': s["name"],
                 'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
                 'values': f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}"
-            }
-
-            # Optional color if specified
-            if "color" in s:
-                series_opts['fill'] = {'color': s["color"]}
-                series_opts['border'] = {'none': True}
-
-            chart.add_series(series_opts)
-
+            })
             if base_chart is None:
                 base_chart = chart
             else:
                 base_chart.combine(chart)
 
-        base_chart.set_title({
-            'name': chart_data["title"],
-            'name_font': {'bold': True, 'size': 14}
-        })
-        base_chart.set_x_axis({
-            'name': chart_data["xAxis"].get("title", ""),
-            'name_font': {'bold': True}
-        })
-
+        base_chart.set_title({'name': chart_data["title"], 'name_font': {'bold': True, 'size': 14}})
+        base_chart.set_x_axis({'name': chart_data["xAxis"].get("title", ""), 'name_font': {'bold': True}})
         y_axis = {'name': chart_data["yAxis"].get("title", ""), 'name_font': {'bold': True}}
         if "min" in chart_data["yAxis"]:
             y_axis["min"] = chart_data["yAxis"]["min"]
         if "max" in chart_data["yAxis"]:
             y_axis["max"] = chart_data["yAxis"]["max"]
-
         base_chart.set_y_axis(y_axis)
         base_chart.set_legend({'position': chart_data.get("legendPosition", "bottom")})
 
         worksheet.insert_chart("E2", base_chart)
         workbook.close()
 
-        return FileResponse(
-            filepath,
-            filename="chart.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        return FileResponse(filepath, filename="chart.xlsx", media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
