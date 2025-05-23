@@ -40,7 +40,7 @@ async def generate_excel(file: UploadFile = File(...)):
         base64_image = base64.b64encode(contents).decode("utf-8")
 
         prompt = """
-You are an expert in reading charts. Based on this image of a chart, extract the chart data in strict JSON format. Follow this schema:
+You are an expert in reading charts to generate precise data and also recreating images of graphs into actual graphs in Microsoft Excel which perfectly match the image in all respects (chart type, formatting, legend for each data series). Ensure all visible chart series (including column and line) are represented. For each series, assign the correct type (column or line) based on visual style. Also include hex color codes matching the image. Do not omit any visible data series."
 
 {
   "title": "string",
