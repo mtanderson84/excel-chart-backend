@@ -80,12 +80,17 @@ Respond only in valid JSON.
         )
 
         raw_response = response.choices[0].message.content
-        print("🧠 Raw GPT response:", raw_response)
+        print("\U0001F9E0 Raw GPT response:", raw_response)
+
+        # Clean triple-backtick markdown if present
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`").split("\n", 1)[-1]
 
         try:
-            chart_data = json.loads(raw_response)
+            chart_data = json.loads(cleaned)
         except json.JSONDecodeError as json_error:
-            raise HTTPException(status_code=500, detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}")
+            raise HTTPException(status_code=500, detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}. Raw content: {raw_response}")
 
         required_keys = ["title", "xAxis", "yAxis", "series"]
         if not all(key in chart_data for key in required_keys):
@@ -97,49 +102,47 @@ Respond only in valid JSON.
         workbook = xlsxwriter.Workbook(filepath)
         worksheet = workbook.add_worksheet("Chart Data")
 
-        # Write headers
-        worksheet.write("A1", chart_data["xAxis"]["title"])
+        worksheet.write("A1", chart_data["xAxis"].get("title", ""))
         worksheet.write_row("A2", ["Category"] + [s["name"] for s in chart_data["series"]])
 
         for i, label in enumerate(chart_data["xAxis"]["labels"]):
             row = [label] + [s["data"][i] if i < len(s["data"]) else 0 for s in chart_data["series"]]
             worksheet.write_row(f"A{i+3}", row)
 
-        # Create initial chart as combo chart
-        base_chart = workbook.add_chart({'type': 'column'})
+        base_chart = None
 
         for i, s in enumerate(chart_data["series"]):
-            series_type = s.get("type", "column")
-            series_chart = workbook.add_chart({'type': series_type})
+            chart_type = s.get("type", "column")
+            chart = workbook.add_chart({'type': chart_type})
 
-            series_chart.add_series({
+            series_opts = {
                 'name': s["name"],
                 'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
-                'values': f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}",
-            })
+                'values': f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}"
+            }
+            chart.add_series(series_opts)
 
-            if i == 0:
-                base_chart = series_chart
+            if base_chart is None:
+                base_chart = chart
             else:
-                base_chart.combine(series_chart)
+                base_chart.combine(chart)
 
         base_chart.set_title({
             'name': chart_data["title"],
             'name_font': {'bold': True, 'size': 14}
         })
         base_chart.set_x_axis({
-            'name': chart_data["xAxis"]["title"],
+            'name': chart_data["xAxis"].get("title", ""),
             'name_font': {'bold': True}
         })
 
-        y_axis = {'name': chart_data["yAxis"]["title"], 'name_font': {'bold': True}}
+        y_axis = {'name': chart_data["yAxis"].get("title", ""), 'name_font': {'bold': True}}
         if "min" in chart_data["yAxis"]:
             y_axis["min"] = chart_data["yAxis"]["min"]
         if "max" in chart_data["yAxis"]:
             y_axis["max"] = chart_data["yAxis"]["max"]
 
         base_chart.set_y_axis(y_axis)
-
         base_chart.set_legend({'position': chart_data.get("legendPosition", "bottom")})
 
         worksheet.insert_chart("E2", base_chart)
@@ -155,5 +158,3 @@ Respond only in valid JSON.
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
-
