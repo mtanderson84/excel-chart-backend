@@ -40,7 +40,8 @@ async def generate_excel(file: UploadFile = File(...)):
         base64_image = base64.b64encode(contents).decode("utf-8")
 
         prompt = """
-You are an expert in reading charts. Based on this image of a chart, extract the chart data in JSON format using this schema:
+You are an expert in reading charts. Based on this image of a chart, extract the chart data in strict JSON format. Follow this schema:
+
 {
   "title": "string",
   "xAxis": {
@@ -62,7 +63,14 @@ You are an expert in reading charts. Based on this image of a chart, extract the
     }
   ]
 }
-Respond only in valid JSON.
+
+Additional rules:
+- If a line crosses the chart, include it as a series with "type": "line"
+- If a series appears below zero, include negative values.
+- Include "color" from bar/line color if visible.
+- If the chart appears stacked, assume columns share the same x-axis label.
+
+Respond with JSON only, no markdown or preamble.
 """
 
         response = client.chat.completions.create(
@@ -80,9 +88,8 @@ Respond only in valid JSON.
         )
 
         raw_response = response.choices[0].message.content
-        print("\U0001F9E0 Raw GPT response:", raw_response)
+        print("🧠 Raw GPT response:", raw_response)
 
-        # Clean triple-backtick markdown if present
         cleaned = raw_response.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.strip("`").split("\n", 1)[-1]
@@ -120,6 +127,12 @@ Respond only in valid JSON.
                 'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
                 'values': f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}"
             }
+
+            # Optional color if specified
+            if "color" in s:
+                series_opts['fill'] = {'color': s["color"]}
+                series_opts['border'] = {'none': True}
+
             chart.add_series(series_opts)
 
             if base_chart is None:
