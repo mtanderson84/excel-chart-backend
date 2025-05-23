@@ -7,6 +7,7 @@ from uuid import uuid4
 from openai import OpenAI
 import base64
 import json
+import re
 
 app = FastAPI()
 
@@ -24,6 +25,147 @@ def get_openai_client():
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY environment variable not set")
     return OpenAI(api_key=api_key)
 
+def clean_json_response(raw_response: str) -> str:
+    """Clean and extract JSON from GPT response"""
+    cleaned = raw_response.strip()
+
+    # Remove code blocks if present
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        start_idx = 1 if lines[0].startswith("```") else 0
+        end_idx = len(lines)
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip() == "```":
+                end_idx = i
+                break
+        cleaned = "\n".join(lines[start_idx:end_idx])
+
+    # Find JSON object boundaries
+    json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+    if json_match:
+        cleaned = json_match.group()
+
+    return cleaned
+
+def validate_and_fix_chart_data(chart_data: dict) -> dict:
+    """Validate and fix common issues in chart data"""
+
+    # Ensure required fields exist
+    if "xAxis" not in chart_data:
+        chart_data["xAxis"] = {"title": "", "labels": []}
+    if "yAxis" not in chart_data:
+        chart_data["yAxis"] = {"title": ""}
+    if "series" not in chart_data:
+        chart_data["series"] = []
+
+    # Ensure all series have same number of data points as x-axis labels
+    num_labels = len(chart_data["xAxis"].get("labels", []))
+    for series in chart_data["series"]:
+        if "data" not in series:
+            series["data"] = [0] * num_labels
+        elif len(series["data"]) < num_labels:
+            # Pad with zeros if data is shorter
+            series["data"].extend([0] * (num_labels - len(series["data"])))
+        elif len(series["data"]) > num_labels:
+            # Truncate if data is longer
+            series["data"] = series["data"][:num_labels]
+
+    # Set default values for missing fields
+    for series in chart_data["series"]:
+        if "type" not in series:
+            series["type"] = "column"
+        if "color" not in series:
+            series["color"] = "#4472C4"  # Default Excel blue
+        if "name" not in series:
+            series["name"] = f"Series {len(chart_data['series'])}"
+
+    return chart_data
+
+def create_excel_chart(chart_data: dict, worksheet, workbook) -> None:
+    """Create Excel chart with improved accuracy"""
+
+    # Determine if we need to combine different chart types
+    chart_types = list(set(s.get("type", "column") for s in chart_data["series"]))
+
+    if len(chart_types) == 1:
+        # Single chart type
+        chart_type = chart_types[0]
+        if chart_type == "line":
+            chart = workbook.add_chart({'type': 'line'})
+        else:
+            chart = workbook.add_chart({'type': 'column'})
+
+        # Add all series to the single chart
+        for i, series in enumerate(chart_data["series"]):
+            col_letter = chr(66 + i)  # B, C, D, etc.
+            chart.add_series({
+                'name': series["name"],
+                'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
+                'values': f"='Chart Data'!${col_letter}$3:${col_letter}${len(chart_data['xAxis']['labels']) + 2}",
+                'line': {'color': series.get("color", "#4472C4")} if series.get("type") == "line" else None,
+                'fill': {'color': series.get("color", "#4472C4")} if series.get("type") == "column" else None
+            })
+    else:
+        # Mixed chart types - create combination chart
+        primary_chart = None
+
+        for i, series in enumerate(chart_data["series"]):
+            col_letter = chr(66 + i)
+            series_type = series.get("type", "column")
+
+            if series_type == "line":
+                chart = workbook.add_chart({'type': 'line'})
+            else:
+                chart = workbook.add_chart({'type': 'column'})
+
+            chart.add_series({
+                'name': series["name"],
+                'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
+                'values': f"='Chart Data'!${col_letter}$3:${col_letter}${len(chart_data['xAxis']['labels']) + 2}",
+                'line': {'color': series.get("color", "#4472C4")} if series_type == "line" else None,
+                'fill': {'color': series.get("color", "#4472C4")} if series_type == "column" else None
+            })
+
+            if primary_chart is None:
+                primary_chart = chart
+            else:
+                primary_chart.combine(chart)
+
+        chart = primary_chart
+
+    # Set chart formatting
+    chart.set_title({
+        'name': chart_data.get("title", "Chart"),
+        'name_font': {'bold': True, 'size': 14}
+    })
+
+    chart.set_x_axis({
+        'name': chart_data["xAxis"].get("title", ""),
+        'name_font': {'bold': True}
+    })
+
+    # Set Y-axis with min/max if specified
+    y_axis_config = {
+        'name': chart_data["yAxis"].get("title", ""),
+        'name_font': {'bold': True}
+    }
+    if "min" in chart_data["yAxis"]:
+        y_axis_config["min"] = chart_data["yAxis"]["min"]
+    if "max" in chart_data["yAxis"]:
+        y_axis_config["max"] = chart_data["yAxis"]["max"]
+
+    chart.set_y_axis(y_axis_config)
+
+    # Set legend position
+    legend_position = chart_data.get("legendPosition", "bottom")
+    if legend_position != "none":
+        chart.set_legend({'position': legend_position})
+    else:
+        chart.set_legend({'none': True})
+
+    # Insert chart into worksheet
+    worksheet.insert_chart("E2", chart, {'x_scale': 1.5, 'y_scale': 1.2})
+
 @app.get("/")
 async def root():
     return {"message": "Chart to Excel API is running"}
@@ -39,34 +181,54 @@ async def generate_excel(file: UploadFile = File(...)):
         contents = await file.read()
         base64_image = base64.b64encode(contents).decode("utf-8")
 
+        # Enhanced prompt with better instructions
         prompt = '''
-You are an expert in reading charts. Based on this image of a chart, extract the chart data in JSON format. 
-Ensure ALL visible data series are included (column or line). Identify the correct type for each series (`line` or `column`), include color in hex (e.g. `#FF0000`), and include y-axis min/max if discernible. Match chart titles, labels, fonts, layout, and legend position. Use this schema:
+You are an expert chart data extraction specialist. Analyze this chart image and extract ALL visible data with maximum precision.
 
+CRITICAL REQUIREMENTS:
+1. Extract EXACT numerical values for each data point - read carefully from the chart
+2. Include ALL visible data series (bars, lines, areas, etc.)
+3. Identify negative values correctly (below zero line)
+4. For stacked charts, provide individual component values, not cumulative
+5. Match colors as closely as possible using hex codes
+6. Preserve exact axis titles and series names as shown
+7. Include precise Y-axis min/max values if visible on the chart
+
+CHART ANALYSIS STEPS:
+1. Identify chart type for each series (column/bar/line/area)
+2. Read X-axis labels exactly as shown
+3. For each data point, read the precise Y-value from the axis scale
+4. Note if values are positive or negative
+5. Identify series colors and names from legend
+6. Record axis titles and chart title exactly
+
+OUTPUT SCHEMA (JSON only, no commentary):
 {
-  "title": "string",
+  "title": "exact chart title",
   "xAxis": {
-    "title": "string",
-    "labels": ["string", ...]
+    "title": "exact x-axis title",
+    "labels": ["label1", "label2", ...]
   },
   "yAxis": {
-    "title": "string",
-    "min": number,
-    "max": number
+    "title": "exact y-axis title",
+    "min": actual_minimum_value_shown,
+    "max": actual_maximum_value_shown
   },
-  "legendPosition": "bottom" | "right" | "none",
+  "legendPosition": "bottom" | "right" | "top" | "left" | "none",
   "series": [
     {
-      "name": "string",
-      "type": "line" | "column",
+      "name": "exact series name from legend",
+      "type": "column" | "line" | "bar" | "area",
       "color": "#RRGGBB",
-      "data": [number, number, ...]
+      "data": [precise_value1, precise_value2, ...]
     }
   ]
 }
-Respond ONLY with raw JSON (no code blocks, no commentary).
+
+RESPOND WITH ONLY THE JSON OBJECT.
 '''
 
+        # Increase token limit for complex charts
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{
@@ -78,65 +240,62 @@ Respond ONLY with raw JSON (no code blocks, no commentary).
                     }
                 ]
             }],
-            max_tokens=1000
+            max_tokens=2000,  # Increased token limit
+            temperature=0.1   # Lower temperature for more consistent results
         )
 
         raw_response = response.choices[0].message.content
-        print("\U0001F9E0 Raw GPT response:", raw_response)
+        print("🧠 Raw GPT response:", raw_response)
 
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`").split("\n", 1)[-1]
+        # Clean and parse JSON response
+        cleaned = clean_json_response(raw_response)
 
         try:
             chart_data = json.loads(cleaned)
         except json.JSONDecodeError as json_error:
-            raise HTTPException(status_code=500, detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}. Raw content: {raw_response}")
+            print(f"JSON parsing failed: {str(json_error)}")
+            print(f"Cleaned content: {cleaned}")
+            raise HTTPException(status_code=500, detail=f"Failed to parse OpenAI response as JSON: {str(json_error)}")
 
-        filename = f"{uuid4().hex}.xlsx"
+        # Validate and fix chart data
+        chart_data = validate_and_fix_chart_data(chart_data)
+        print("📊 Processed chart data:", json.dumps(chart_data, indent=2))
+
+        # Generate Excel file
+        filename = f"chart_{uuid4().hex}.xlsx"
         filepath = f"/tmp/{filename}"
 
         workbook = xlsxwriter.Workbook(filepath)
         worksheet = workbook.add_worksheet("Chart Data")
 
-        worksheet.write("A1", chart_data["xAxis"].get("title", ""))
-        worksheet.write_row("A2", ["Category"] + [s["name"] for s in chart_data["series"]])
+        # Write headers and data
+        worksheet.write("A1", chart_data["xAxis"].get("title", "Category"))
 
+        # Write column headers
+        headers = ["Category"] + [s["name"] for s in chart_data["series"]]
+        worksheet.write_row("A2", headers)
+
+        # Write data rows
         for i, label in enumerate(chart_data["xAxis"]["labels"]):
-            row = [label] + [s["data"][i] if i < len(s["data"]) else 0 for s in chart_data["series"]]
-            worksheet.write_row(f"A{i+3}", row)
+            row_data = [label]
+            for series in chart_data["series"]:
+                value = series["data"][i] if i < len(series["data"]) else 0
+                row_data.append(value)
+            worksheet.write_row(f"A{i+3}", row_data)
 
-        base_chart = None
-        for i, s in enumerate(chart_data["series"]):
-            chart_type = s.get("type", "column")
-            chart = workbook.add_chart({'type': chart_type})
-            chart.add_series({
-                'name': s["name"],
-                'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
-                'values': f"='Chart Data'!${chr(66 + i)}$3:${chr(66 + i)}${len(chart_data['xAxis']['labels']) + 2}"
-            })
-            if base_chart is None:
-                base_chart = chart
-            else:
-                base_chart.combine(chart)
+        # Create chart with improved accuracy
+        create_excel_chart(chart_data, worksheet, workbook)
 
-        base_chart.set_title({'name': chart_data["title"], 'name_font': {'bold': True, 'size': 14}})
-        base_chart.set_x_axis({'name': chart_data["xAxis"].get("title", ""), 'name_font': {'bold': True}})
-        y_axis = {'name': chart_data["yAxis"].get("title", ""), 'name_font': {'bold': True}}
-        if "min" in chart_data["yAxis"]:
-            y_axis["min"] = chart_data["yAxis"]["min"]
-        if "max" in chart_data["yAxis"]:
-            y_axis["max"] = chart_data["yAxis"]["max"]
-        base_chart.set_y_axis(y_axis)
-        base_chart.set_legend({'position': chart_data.get("legendPosition", "bottom")})
-
-        worksheet.insert_chart("E2", base_chart)
         workbook.close()
 
-        return FileResponse(filepath, filename="chart.xlsx", media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        return FileResponse(
+            filepath, 
+            filename="extracted_chart.xlsx", 
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
