@@ -58,43 +58,67 @@ def build_excel_file(chart_data: dict, filepath: str):
         row = [label] + [s["data"][i] if i < len(s["data"]) else 0 for s in chart_data["series"]]
         worksheet.write_row(f"A{i+3}", row)
 
+    chart_type = chart_data.get("chartType", "column").lower()
+    num_labels = len(chart_data["xAxis"]["labels"])
     base_chart = None
 
     for i, s in enumerate(chart_data["series"]):
         series_type = s.get("type", "column").lower()
-        if series_type not in ["line", "column"]:
-            series_type = "column"
-        chart = workbook.add_chart({'type': series_type})
+        is_stacked = s.get("isStacked", False)
+        color = s.get("color")
+
+        chart_args = {'type': series_type}
+        if chart_type == "stacked_column" or is_stacked:
+            if series_type == "column":
+                chart_args["subtype"] = "stacked"
+
+        chart = workbook.add_chart(chart_args)
 
         col_letter = chr(66 + i)
-        chart.add_series({
+        series_conf = {
             'name': s["name"],
-            'categories': f"='Chart Data'!$A$3:$A${len(chart_data['xAxis']['labels']) + 2}",
-            'values': f"='Chart Data'!${col_letter}$3:${col_letter}${len(chart_data['xAxis']['labels']) + 2}"
-        })
+            'categories': f"='Chart Data'!$A$3:$A${num_labels + 2}",
+            'values': f"='Chart Data'!${col_letter}$3:${col_letter}${num_labels + 2}"
+        }
+
+        if series_type == "line":
+            series_conf["line"] = {"color": color or "#000000"}
+            series_conf["marker"] = {"type": "circle", "size": 6}
+        elif color:
+            series_conf["fill"] = {"color": color}
+            series_conf["border"] = {"color": "#FFFFFF"}
+
+        chart.add_series(series_conf)
 
         if base_chart is None:
             base_chart = chart
         else:
             base_chart.combine(chart)
 
-    base_chart.set_title({'name': chart_data.get("title", "Chart"), 'name_font': {'bold': True, 'size': 14}})
-    base_chart.set_x_axis({'name': chart_data["xAxis"].get("title", ""), 'name_font': {'bold': True}})
+    base_chart.set_title({
+        'name': chart_data.get("title", "Chart"),
+        'name_font': {'bold': True, 'size': 14}
+    })
+    base_chart.set_x_axis({
+        'name': chart_data["xAxis"].get("title", ""),
+        'name_font': {'bold': True}
+    })
 
-    y_axis = {'name': chart_data["yAxis"].get("title", ""), 'name_font': {'bold': True}}
-    if "min" in chart_data["yAxis"] and "max" in chart_data["yAxis"]:
+    y_axis = {
+        'name': chart_data["yAxis"].get("title", ""),
+        'name_font': {'bold': True}
+    }
+    if "min" in chart_data["yAxis"]:
         y_axis["min"] = chart_data["yAxis"]["min"]
+    if "max" in chart_data["yAxis"]:
         y_axis["max"] = chart_data["yAxis"]["max"]
-    else:
-        inferred_min, inferred_max = infer_y_axis_range(chart_data)
-        y_axis["min"] = inferred_min
-        y_axis["max"] = inferred_max
-
     base_chart.set_y_axis(y_axis)
+
     base_chart.set_legend({'position': chart_data.get("legendPosition", "bottom")})
 
     worksheet.insert_chart("E2", base_chart)
     workbook.close()
+
 
 def generate_prompt():
     return '''
