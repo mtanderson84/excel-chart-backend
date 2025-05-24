@@ -95,7 +95,11 @@ def build_excel_file(chart_data: dict, filepath: str):
             series_conf["fill"] = {"color": color}
             series_conf["border"] = {"color": "#FFFFFF"}
 
-        chart.add_series(series_conf)
+        logger.info("📊 Adding series to chart: %s", json.dumps(series_conf, indent=2))
+        if isinstance(s.get("data"), list) and any(isinstance(v, (int, float)) for v in s["data"]):
+            chart.add_series(series_conf)
+        else:
+            logger.warning("⚠️ Skipping series due to invalid or missing data: %s", s.get("name"))
         base_chart.combine(chart)
 
     base_chart.set_title({
