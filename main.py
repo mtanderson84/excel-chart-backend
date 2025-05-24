@@ -60,7 +60,7 @@ def build_excel_file(chart_data: dict, filepath: str):
 
     chart_type = chart_data.get("chartType", "column").lower()
     num_labels = len(chart_data["xAxis"]["labels"])
-    base_chart = workbook.add_chart({'type': 'column'})
+    base_chart = None
 
     for i, s in enumerate(chart_data["series"]):
         series_type_raw = s.get("type", "column").lower()
@@ -70,7 +70,6 @@ def build_excel_file(chart_data: dict, filepath: str):
             series_type = "line"
         else:
             series_type = "column"
-
         is_stacked = s.get("isStacked", False)
         color = s.get("color")
 
@@ -95,12 +94,18 @@ def build_excel_file(chart_data: dict, filepath: str):
             series_conf["fill"] = {"color": color}
             series_conf["border"] = {"color": "#FFFFFF"}
 
-        logger.info("📊 Adding series to chart: %s", json.dumps(series_conf, indent=2))
         if isinstance(s.get("data"), list) and any(isinstance(v, (int, float)) for v in s["data"]):
             chart.add_series(series_conf)
         else:
-            logger.warning("⚠️ Skipping series due to invalid or missing data: %s", s.get("name"))
-        base_chart.combine(chart)
+            logger.warning("⚠️ Skipping invalid or empty series: %s", s.get("name"))
+
+        if base_chart is None:
+            base_chart = chart
+        else:
+            base_chart.combine(chart)
+
+    if base_chart is None:
+        raise ValueError("No valid chart series found. Chart must contain at least one data series.")
 
     base_chart.set_title({
         'name': chart_data.get("title", "Chart"),
@@ -198,7 +203,6 @@ async def generate_excel(file: UploadFile = File(...)):
         logger.info("🧠 Raw GPT response (first 500 chars): %s", raw_response[:500])
         chart_data = clean_gpt_response(raw_response)
 
-        # Fix label/series mismatch
         num_labels = len(chart_data["xAxis"]["labels"])
         for series in chart_data["series"]:
             if len(series["data"]) < num_labels:
@@ -224,6 +228,7 @@ async def generate_excel(file: UploadFile = File(...)):
         logger.error("❌ Unexpected error: %s", str(e))
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 
 
 
