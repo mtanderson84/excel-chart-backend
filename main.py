@@ -61,6 +61,7 @@ def build_excel_file(chart_data: dict, filepath: str):
     chart_type = chart_data.get("chartType", "column").lower()
     num_labels = len(chart_data["xAxis"]["labels"])
     base_chart = None
+    is_any_series_added = False
 
     for i, s in enumerate(chart_data["series"]):
         series_type_raw = s.get("type", "column").lower()
@@ -96,6 +97,7 @@ def build_excel_file(chart_data: dict, filepath: str):
 
         if isinstance(s.get("data"), list) and any(isinstance(v, (int, float)) for v in s["data"]):
             chart.add_series(series_conf)
+            is_any_series_added = True
         else:
             logger.warning("⚠️ Skipping invalid or empty series: %s", s.get("name"))
 
@@ -104,7 +106,7 @@ def build_excel_file(chart_data: dict, filepath: str):
         else:
             base_chart.combine(chart)
 
-    if base_chart is None:
+    if base_chart is None or not is_any_series_added:
         raise ValueError("No valid chart series found. Chart must contain at least one data series.")
 
     base_chart.set_title({
@@ -139,8 +141,6 @@ IMPORTANT:
 - Identify the chart type: column, stacked_column, bar, line, or combination.
 - Match exact values for every series and label.
 - Detect axis titles, legends, series types, colors, and y-axis scale.
-- Include all series, especially if stacked or overlapping — do not omit any visible series.
-- If a series appears to be below zero, treat it as a negative value.
 
 Respond in this schema:
 {
@@ -212,9 +212,6 @@ async def generate_excel(file: UploadFile = File(...)):
             elif len(series["data"]) > num_labels:
                 series["data"] = series["data"][:num_labels]
 
-        if len(chart_data["series"]) < 3:
-            logger.warning("⚠️ Incomplete series data — expected 3 series, got %d", len(chart_data["series"]))
-
         filename = f"chart_{uuid4().hex}.xlsx"
         filepath = f"/tmp/{filename}"
         logger.info("✅ Cleaned chart data:\n%s", json.dumps(chart_data, indent=2))
@@ -233,6 +230,7 @@ async def generate_excel(file: UploadFile = File(...)):
         logger.error("❌ Unexpected error: %s", str(e))
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 
 
 
