@@ -63,7 +63,14 @@ def build_excel_file(chart_data: dict, filepath: str):
     base_chart = None
 
     for i, s in enumerate(chart_data["series"]):
-        series_type = s.get("type", "column").lower()
+        series_type_raw = s.get("type", "column").lower()
+        if series_type_raw in ["line", "column"]:
+            series_type = series_type_raw
+        elif "line" in series_type_raw:
+            series_type = "line"
+        else:
+            # Default to 'column' for types like 'stacked_column', 'grouped_column', etc.
+            series_type = "column"
         is_stacked = s.get("isStacked", False)
         color = s.get("color")
 
