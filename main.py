@@ -60,7 +60,7 @@ def build_excel_file(chart_data: dict, filepath: str):
 
     chart_type = chart_data.get("chartType", "column").lower()
     num_labels = len(chart_data["xAxis"]["labels"])
-    base_chart = None
+    base_chart = workbook.add_chart({'type': 'column'})
 
     for i, s in enumerate(chart_data["series"]):
         series_type_raw = s.get("type", "column").lower()
@@ -69,8 +69,8 @@ def build_excel_file(chart_data: dict, filepath: str):
         elif "line" in series_type_raw:
             series_type = "line"
         else:
-            # Default to 'column' for types like 'stacked_column', 'grouped_column', etc.
             series_type = "column"
+
         is_stacked = s.get("isStacked", False)
         color = s.get("color")
 
@@ -96,11 +96,7 @@ def build_excel_file(chart_data: dict, filepath: str):
             series_conf["border"] = {"color": "#FFFFFF"}
 
         chart.add_series(series_conf)
-
-        if base_chart is None:
-            base_chart = chart
-        else:
-            base_chart.combine(chart)
+        base_chart.combine(chart)
 
     base_chart.set_title({
         'name': chart_data.get("title", "Chart"),
@@ -125,7 +121,6 @@ def build_excel_file(chart_data: dict, filepath: str):
 
     worksheet.insert_chart("E2", base_chart)
     workbook.close()
-
 
 def generate_prompt():
     return '''
@@ -225,5 +220,6 @@ async def generate_excel(file: UploadFile = File(...)):
         logger.error("❌ Unexpected error: %s", str(e))
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 
 
