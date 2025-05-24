@@ -1,3 +1,6 @@
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
@@ -162,6 +165,7 @@ async def generate_excel(file: UploadFile = File(...)):
         )
 
         raw_response = response.choices[0].message.content
+        logger.info("🧠 Raw GPT response (first 500 chars): %s", raw_response[:500])
         chart_data = clean_gpt_response(raw_response)
 
         # Fix label/series mismatch
@@ -174,6 +178,7 @@ async def generate_excel(file: UploadFile = File(...)):
 
         filename = f"chart_{uuid4().hex}.xlsx"
         filepath = f"/tmp/{filename}"
+        logger.info("✅ Cleaned chart data:\n%s", json.dumps(chart_data, indent=2))
         build_excel_file(chart_data, filepath)
 
         return FileResponse(
@@ -185,7 +190,9 @@ async def generate_excel(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        print("Error:", e)
+        import traceback
+        logger.error("❌ Unexpected error: %s", str(e))
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
