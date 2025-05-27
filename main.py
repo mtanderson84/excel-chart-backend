@@ -176,7 +176,7 @@ async def root():
     return {"message": "Chart to Excel API is running"}
 
 @app.post("/generate-excel/")
-async def generate_excel(file: UploadFile = File(...)):
+async def generate_excel(file: UploadFile = File(...)): 
     try:
         client = get_openai_client()
 
@@ -189,7 +189,7 @@ async def generate_excel(file: UploadFile = File(...)):
         prompt = generate_prompt()
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="04-mini-high",
             messages=[{
                 "role": "user",
                 "content": [
@@ -230,9 +230,6 @@ async def generate_excel(file: UploadFile = File(...)):
         logger.error("❌ Unexpected error: %s", str(e))
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
-
-
 
 
 
