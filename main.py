@@ -189,7 +189,7 @@ async def generate_excel(file: UploadFile = File(...)):
         prompt = generate_prompt()
 
         response = client.chat.completions.create(
-            model="04-mini-high",
+            model="gpt-4o",
             messages=[{
                 "role": "user",
                 "content": [
